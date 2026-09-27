@@ -1,4 +1,4 @@
-// zc-prism v6 (installed by the Prism plugin for ZCode)
+// zc-prism v7 (installed by the Prism plugin for ZCode)
 // Per-project color + icon for the ZCode desktop sidebar, with a right-click
 // picker on project headers. Everything here runs inside the production
 // renderer and must never break the app: every entry point is defensive.
@@ -130,10 +130,12 @@
       }
       if (st.brightenThinking) {
         // the shimmer sweep animates the --animated-gradient-text-soft stop,
-        // which is only 20% white in dark themes; lift it to 50% of the strong
-        // color so the pulse stays theme-correct but clearly visible
+        // which is only ~20% white in dark themes; lift it to 65% of the strong
+        // color so the pulse stays theme-correct but clearly visible. Also
+        // covers .cua-group-gradient-text (computer-use streaming label),
+        // which sweeps the same two variables.
         rules.push(
-          ".animated-gradient-text { --animated-gradient-text-soft: color-mix(in oklab, var(--animated-gradient-text-strong) 50%, transparent) !important; }",
+          ":is(.animated-gradient-text, .cua-group-gradient-text) { --animated-gradient-text-soft: color-mix(in oklab, var(--animated-gradient-text-strong) 65%, transparent) !important; }",
         );
       }
       el.textContent = rules.join("\n");
@@ -745,7 +747,7 @@
         },
         true,
       );
-      window.__zcPrism = { version: 6, pass, openPicker, openRename };
+      window.__zcPrism = { version: 7, pass, openPicker, openRename };
     }
 
     if (document.body) start();
