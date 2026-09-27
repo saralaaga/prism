@@ -1,5 +1,14 @@
 {
   "name": "carlos-local",
+  "description": "Marketplace for Prism: per-project colors, icons and display names for the ZCode desktop sidebar.",
+  "description_i18n": {
+    "en": "Marketplace for Prism: per-project colors, icons and display names for the ZCode desktop sidebar.",
+    "zh-CN": "Prism 插件市场：为 ZCode 桌面端侧边栏的每个项目提供专属颜色、图标与显示名。"
+  },
+  "owner": {
+    "name": "Carlos",
+    "url": "https://github.com/saralaaga/prism"
+  },
   "interface": {
     "displayName": "Carlos Local"
   },
@@ -10,8 +19,29 @@
         "source": "directory",
         "path": "./prism"
       },
+      "displayName": "Prism",
+      "displayName_i18n": {
+        "en": "Prism",
+        "zh-CN": "棱镜"
+      },
       "description": "Per-project colors, icons and display names for the desktop sidebar.",
-      "version": "0.2.0",
+      "description_i18n": {
+        "en": "Per-project colors, icons and display names for the desktop sidebar.",
+        "zh-CN": "为桌面端侧边栏的每个项目提供专属颜色、图标与显示名。"
+      },
+      "version": "0.2.1",
+      "author": {
+        "name": "Carlos"
+      },
+      "homepage": "https://github.com/saralaaga/prism",
+      "keywords": [
+        "sidebar",
+        "color",
+        "icon",
+        "rename",
+        "customization",
+        "desktop"
+      ],
       "icon": "https://raw.githubusercontent.com/saralaaga/prism/main/prism/assets/icon.png",
       "policy": {
         "installation": "AVAILABLE",
