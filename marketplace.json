@@ -12,7 +12,7 @@
       },
       "description": "Per-project colors, icons and display names for the desktop sidebar.",
       "version": "0.2.0",
-      "icon": "./prism/assets/icon.png",
+      "icon": "https://raw.githubusercontent.com/saralaaga/prism/main/prism/assets/icon.png",
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
