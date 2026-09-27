@@ -69,10 +69,14 @@ for (const name of WANT) {
   if (!done) missing.push(name);
 }
 console.log("extracted:", Object.keys(icons).length, "missing:", missing);
+// Values are embedded in double-quoted JS strings, so escape `"` for the JS
+// string context only. HTML-entity-encoding them (&quot;) would corrupt the
+// markup: innerHTML parses `d=&quot;m18 16&quot;` as an unquoted attribute and
+// truncates the path data at the first space.
 const literal =
   "const ICONS = {\n" +
   Object.entries(icons)
-    .map(([k, v]) => `  "${k}": "${v.replace(/"/g, "&quot;")}"`)
+    .map(([k, v]) => `  "${k}": "${v.replace(/"/g, '\\"')}"`)
     .join(",\n") +
   "\n};";
 fs.writeFileSync(OUT, literal + "\n");
