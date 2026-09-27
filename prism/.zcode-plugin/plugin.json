@@ -1,0 +1,13 @@
+{
+  "name": "prism",
+  "version": "0.2.0",
+  "description": "Prism: give every project in the ZCode sidebar its own color, icon and display name. Right-click a project (or its '...' menu) to personalize; self-heals after app updates.",
+  "author": {
+    "name": "Carlos"
+  },
+  "icons": {
+    "128": "./assets/icon.png"
+  },
+  "hooks": "hooks",
+  "commands": "commands"
+}

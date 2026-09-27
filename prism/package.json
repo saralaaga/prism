@@ -1,0 +1,9 @@
+{
+  "name": "prism",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Prism: per-project colors, icons and display names for the ZCode desktop sidebar.",
+  "dependencies": {
+    "@electron/asar": "4.3.1"
+  }
+}

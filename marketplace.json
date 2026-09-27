@@ -1,0 +1,23 @@
+{
+  "name": "carlos-local",
+  "interface": {
+    "displayName": "Carlos Local"
+  },
+  "plugins": [
+    {
+      "name": "prism",
+      "source": {
+        "source": "directory",
+        "path": "./prism"
+      },
+      "description": "Per-project colors, icons and display names for the desktop sidebar.",
+      "version": "0.2.0",
+      "icon": "./prism/assets/icon.png",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
