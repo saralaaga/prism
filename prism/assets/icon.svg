@@ -1,24 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#24272a"/>
-      <stop offset="1" stop-color="#101214"/>
-    </linearGradient>
     <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
-      <stop offset="1" stop-color="#ffffff"/>
+      <stop offset="0" stop-color="#2b3038" stop-opacity="0"/>
+      <stop offset="1" stop-color="#2b3038" stop-opacity="0.9"/>
     </linearGradient>
   </defs>
 
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
-  <rect x="17" y="17" width="478" height="478" rx="111" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+  <!-- transparent background: ZCode's marketplace inverts icons drawn for light mode
+       (NIGHT_READER_INVERSION_FILTER), so the glyph must be dark-on-clear, never a tile -->
 
   <!-- incoming white beam -->
-  <line x1="76" y1="238" x2="196" y2="252" stroke="#ffffff" stroke-opacity="0.14" stroke-width="26" stroke-linecap="round"/>
+  <line x1="76" y1="238" x2="196" y2="252" stroke="#23272d" stroke-opacity="0.18" stroke-width="26" stroke-linecap="round"/>
   <line x1="76" y1="238" x2="196" y2="252" stroke="url(#beam)" stroke-width="14" stroke-linecap="round"/>
 
   <!-- prism -->
-  <path d="M256 128 L366 344 L146 344 Z" fill="#ffffff" fill-opacity="0.05" stroke="#d9dce0" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M256 128 L366 344 L146 344 Z" fill="#30353c" fill-opacity="0.05" stroke="#3d434b" stroke-width="16" stroke-linejoin="round"/>
 
   <!-- dispersed spectrum -->
   <g stroke-linecap="round">

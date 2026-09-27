@@ -1,4 +1,4 @@
-// zc-prism v5 (installed by the Prism plugin for ZCode)
+// zc-prism v6 (installed by the Prism plugin for ZCode)
 // Per-project color + icon for the ZCode desktop sidebar, with a right-click
 // picker on project headers. Everything here runs inside the production
 // renderer and must never break the app: every entry point is defensive.
@@ -140,6 +140,10 @@
     }
 
     const autoHueCache = new Map();
+    // leaf aliases currently applied to timeline rows, so clearing an alias
+    // can restore the original text immediately instead of waiting for the
+    // app's next re-render of that row
+    const rowAliasApplied = new Map();
     function autoHue(key) {
       let h = autoHueCache.get(key);
       if (h === undefined) {
@@ -212,14 +216,31 @@
         "</svg>";
     }
 
-    // Show the display alias on the project header label (React restores the
-    // original text on re-render; the next pass rewrites it, guarded by text
-    // comparison so no mutation is emitted once equal).
+    // Show the display alias on the project header label. The text node is
+    // edited IN PLACE (nodeValue): assigning textContent would detach the
+    // text node React tracks, and its next commit would throw
+    // "removeChild ... not a child of this node". React restores the original
+    // text on re-render; the next pass rewrites it, guarded by comparison so
+    // no mutation is emitted once equal.
     function syncHeaderAlias(header, path) {
-      const alias = readAliasMap()[path];
-      if (!alias) return;
       const label = header.querySelector("div.truncate");
-      if (label && label.textContent !== alias) label.textContent = alias;
+      if (!label) return;
+      const alias = readAliasMap()[path];
+      const orig = label.dataset.zcPtOrig;
+      if (!alias) {
+        if (orig !== undefined) {
+          delete label.dataset.zcPtOrig;
+          for (const n of label.childNodes) {
+            if (n.nodeType === 3 && n.nodeValue !== orig) n.nodeValue = orig;
+          }
+        }
+        return;
+      }
+      for (const n of label.childNodes) {
+        if (n.nodeType !== 3 || n.nodeValue === alias) continue;
+        if (orig === undefined) label.dataset.zcPtOrig = n.nodeValue;
+        n.nodeValue = alias;
+      }
     }
 
     function pass(root) {
@@ -236,16 +257,38 @@
         el.style.setProperty("--zc-pt-h", want.split(".")[0]);
       }
       // timeline rows show the workspace leaf name in a span.truncate; swap in
-      // the alias when one is set (text-compare guard, see syncHeaderAlias)
+      // the alias when one is set. Text nodes are edited in place (nodeValue),
+      // never via textContent — detaching React's tracked node would crash its
+      // next commit with "removeChild ... not a child of this node".
       for (const el of rows) {
         const path = projectOfRow(el);
-        const alias = path ? aliasMap[path] : null;
-        if (!alias) continue;
+        if (!path) continue;
+        const alias = aliasMap[path];
         const leaf = leafOf(path);
         if (leaf === alias) continue;
-        for (const lb of el.querySelectorAll("span.truncate")) {
-          if (lb.textContent === leaf) lb.textContent = alias;
+        const applied = rowAliasApplied.get(path);
+        if (!alias) {
+          if (applied !== undefined) {
+            rowAliasApplied.delete(path);
+            for (const lb of el.querySelectorAll("span.truncate")) {
+              for (const n of lb.childNodes) {
+                if (n.nodeType === 3 && n.nodeValue === applied) n.nodeValue = leaf;
+              }
+            }
+          }
+          continue;
         }
+        let hit = false;
+        for (const lb of el.querySelectorAll("span.truncate")) {
+          for (const n of lb.childNodes) {
+            if (n.nodeType === 3 && n.nodeValue === leaf) {
+              n.nodeValue = alias;
+              hit = true;
+            }
+          }
+        }
+        if (hit) rowAliasApplied.set(path, alias);
+        else if (applied !== undefined) rowAliasApplied.set(path, applied);
       }
       const headers = root.querySelectorAll(HEADER_SELECTOR);
       for (const el of headers) {
@@ -431,18 +474,32 @@
     // ---- native "..." menu enhancement ----
     let pendingProject = null;
     function dismissNativeMenu(menuEl) {
+      // React attaches its listeners at the root container, so an Escape
+      // dispatched on `document` never reaches the menu; dispatched on the
+      // menu element itself it bubbles through the root and Radix closes the
+      // menu through its own state path. Never detach the node here: React
+      // unmounts it later and a forced removal makes that removeChild throw.
       try {
-        document.dispatchEvent(
+        menuEl.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
         );
       } catch (_) {}
+      // If the synthetic Escape was ignored, just get the menu out of the way;
+      // the next pointerdown dismisses it for real. Unhide on any later
+      // pointerdown in case the app reuses the node for the next menu.
       setTimeout(() => {
         try {
-          if (menuEl && menuEl.isConnected && document.contains(menuEl)) {
-            (menuEl.parentNode || menuEl).remove();
-          }
+          if (!menuEl || !menuEl.isConnected) return;
+          menuEl.style.display = "none";
+          const unhide = () => {
+            document.removeEventListener("pointerdown", unhide, true);
+            try {
+              if (menuEl.isConnected && menuEl.style.display === "none") menuEl.style.display = "";
+            } catch (_) {}
+          };
+          document.addEventListener("pointerdown", unhide, true);
         } catch (_) {}
-      }, 60);
+      }, 80);
     }
     function enhanceProjectMenus() {
       const menus = document.querySelectorAll('[role="menu"]:not([data-zc-pt-menu])');
@@ -688,7 +745,7 @@
         },
         true,
       );
-      window.__zcPrism = { version: 5, pass, openPicker, openRename };
+      window.__zcPrism = { version: 6, pass, openPicker, openRename };
     }
 
     if (document.body) start();

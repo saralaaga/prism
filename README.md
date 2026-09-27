@@ -20,10 +20,13 @@
 | 任意视图换色 | Alt + 右键该项目的任意会话行 |
 | 全局开关 | 取色盘底部「Prism 全局」 |
 | 恢复自动配色 | 色盘里的「自」 |
+| 状态自检 | 会话内运行 `/status`（查看 shim 安装状态与用法提醒） |
 
 所有选择即时生效；数据存于渲染进程 localStorage（`zcProjectTint.*` / `zcPrism.settings.v1`）。
 
 ## 安装
+
+要求：macOS + ZCode 桌面端（仅在 `/Applications/ZCode.app` 默认布局下验证过）。
 
 本仓库根目录即一个 ZCode marketplace：
 
@@ -64,4 +67,8 @@ node prism/hooks/ensure-shim.js --apply   # 手动重打；平时 SessionStart �
 
 ## License
 
-MIT（本仓库代码）。内嵌图标为 [Lucide](https://lucide.dev)（ISC）path 数据。
+MIT（本仓库代码，全文见 [LICENSE](LICENSE)）。内嵌图标为 [Lucide](https://lucide.dev)（ISC）path 数据。
+
+## 更新日志
+
+见 [CHANGELOG.md](CHANGELOG.md)。
