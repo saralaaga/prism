@@ -6,7 +6,7 @@
           {
             "type": "process",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/ensure-shim.js"],
+            "args": ["${ZCODE_PLUGIN_ROOT}/hooks/ensure-shim.js"],
             "timeoutMs": 10000
           }
         ]

@@ -1,6 +1,6 @@
 {
   "name": "prism",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Prism: give every project in the ZCode sidebar its own color, icon and display name, plus a recency-ordered grouped view. Right-click a project (or its '...' menu) to personalize; self-heals after app updates.",
   "description_i18n": {
     "en": "Prism: give every project in the ZCode sidebar its own color, icon and display name, plus a recency-ordered grouped view. Right-click a project (or its '...' menu) to personalize; self-heals after app updates.",

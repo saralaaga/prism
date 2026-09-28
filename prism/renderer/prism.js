@@ -1,4 +1,4 @@
-// zc-prism v8 (installed by the Prism plugin for ZCode)
+// zc-prism v9 (installed by the Prism plugin for ZCode)
 // Per-project AND per-conversation color + icon for the ZCode desktop
 // sidebar, a right-click picker on project headers, and an opt-out recency
 // ordering for every sidebar view. Everything here runs inside the production
@@ -200,7 +200,7 @@
     }
     function hueFor(path) {
       const v = readMap()[path];
-      if (typeof v === "number") return v;
+      if (typeof v === "number") return v === -1 ? null : v; // -1 = explicit transparent
       return readSettings().autoColor ? autoHue(path) : null;
     }
     function hueColor(path) {
@@ -619,12 +619,13 @@
         if (!path) continue;
         const tk = taskKeyOf(el);
         const tv = tk !== null ? taskMap[tk] : undefined;
-        const v = typeof tv === "number" ? tv : map[path];
-        const on = typeof v === "number" || st.autoColor;
-        const want = on ? String(typeof v === "number" ? v : autoHue(path)) : "off";
+        let v = typeof tv === "number" ? tv : map[path];
+        if (v === -1) v = null; // explicit transparent beats project/auto
+        else if (v === undefined && st.autoColor) v = autoHue(path);
+        const want = typeof v === "number" ? String(v) : "off";
         if (el.dataset.zcPtH === want) continue;
         el.dataset.zcPtH = want;
-        if (on) {
+        if (typeof v === "number") {
           el.style.setProperty("--zc-pt-h", want.split(".")[0]);
           el.dataset.zcPtOn = "1";
         } else {
@@ -670,12 +671,13 @@
       for (const el of headers) {
         const path = projectOfHeader(el);
         if (!path) continue;
-        const v = map[path];
-        const on = typeof v === "number" || st.autoColor;
-        const want = on ? String(typeof v === "number" ? v : autoHue(path)) : "off";
+        let v = map[path];
+        if (v === -1) v = null;
+        else if (v === undefined && st.autoColor) v = autoHue(path);
+        const want = typeof v === "number" ? String(v) : "off";
         if (el.dataset.zcPtH !== want) {
           el.dataset.zcPtH = want;
-          if (on) {
+          if (typeof v === "number") {
             el.style.setProperty("--zc-pt-h", want.split(".")[0]);
             el.dataset.zcPtOn = "1";
           } else {
@@ -734,6 +736,7 @@
         ".zc-pt-swatch:hover { transform: scale(1.12); }",
         ".zc-pt-swatch[data-current='1'] { outline: 2px solid #fff; outline-offset: 1px; }",
         ".zc-pt-swatch.zc-pt-auto { background: transparent; color: #cfd3d6; font-weight: 500; }",
+        ".zc-pt-swatch.zc-pt-none { background: linear-gradient(135deg, transparent 42%, #e05252 42%, #e05252 58%, transparent 58%); }",
         ".zc-pt-sep { margin: 10px 0 6px; font-size: 11px; opacity: 0.55; }",
         ".zc-pt-isw { width: 24px; height: 24px; border-radius: 7px; cursor: pointer;",
         "  display: flex; align-items: center; justify-content: center; color: #b9bec3; }",
@@ -860,6 +863,8 @@
     // ---- native "..." menu / context menu enhancement ----
     let pendingProject = null;
     let pendingTask = null;
+    // lucide "ban" glyph — used by the one-click "cancel color" entries
+    const BAN_PATHS = '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>';
     function dismissNativeMenu(menuEl) {
       // React attaches its listeners at the root container, so an Escape
       // dispatched on `document` never reaches the menu; dispatched on the
@@ -910,13 +915,13 @@
         }
         if (!template) continue;
         menuEl.dataset.zcPtMenu = wantTask ? task.key : proj.path;
-        const mk = (label, iconId, fn) => {
+        const mk = (label, paths, fn) => {
           const el = template.cloneNode(true);
           el.setAttribute("data-zc-pt-item", "1");
           const svg = el.querySelector("svg");
           const iconMarkup =
             '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none">' +
-            iconInner(iconId) +
+            paths +
             "</svg>";
           if (svg) svg.outerHTML = iconMarkup;
           for (const n of Array.from(el.childNodes)) {
@@ -932,10 +937,26 @@
           return el;
         };
         if (wantTask) {
-          menuEl.appendChild(mk("调整颜色（此对话）", "palette", openTaskPicker));
+          menuEl.appendChild(mk("调整颜色（此对话）", iconInner("palette"), openTaskPicker));
+          menuEl.appendChild(
+            mk("取消颜色（此对话）", BAN_PATHS, (key) => {
+              const m = readTaskMap();
+              m[key] = -1;
+              writeTaskMap(m);
+              pass(document);
+            }),
+          );
         } else {
-          menuEl.appendChild(mk("调整颜色", "palette", openPicker));
-          menuEl.appendChild(mk("重命名", "pen-tool", openRename));
+          menuEl.appendChild(mk("调整颜色", iconInner("palette"), openPicker));
+          menuEl.appendChild(
+            mk("取消颜色", BAN_PATHS, (path) => {
+              const m = readMap();
+              m[path] = -1;
+              writeMap(m);
+              pass(document);
+            }),
+          );
+          menuEl.appendChild(mk("重命名", iconInner("pen-tool"), openRename));
         }
       }
     }
@@ -977,13 +998,23 @@
           });
           grid.appendChild(sw);
         }
+        const noneSw = document.createElement("div");
+        noneSw.className = "zc-pt-swatch zc-pt-none";
+        noneSw.dataset.v = "-1";
+        noneSw.title = "透明（明确不染色，优先于自动配色）";
+        noneSw.addEventListener("click", () => {
+          const map = readMap();
+          map[path] = -1;
+          writeMap(map);
+          pass(document);
+          markCurrent(grid, -1);
+        });
+        grid.appendChild(noneSw);
         const auto = document.createElement("div");
         auto.className = "zc-pt-swatch zc-pt-auto";
         auto.textContent = "自";
         auto.dataset.v = "auto";
-        auto.title = readSettings().autoColor
-          ? "恢复自动配色（按路径哈希）"
-          : "清除颜色（自动配色当前关闭）";
+        auto.title = "跟随全局自动配色（开启=按路径哈希，关闭=无颜色）";
         auto.addEventListener("click", () => {
           const map = readMap();
           delete map[path];
@@ -1116,6 +1147,18 @@
           });
           grid.appendChild(sw);
         }
+        const noneSw = document.createElement("div");
+        noneSw.className = "zc-pt-swatch zc-pt-none";
+        noneSw.dataset.v = "-1";
+        noneSw.title = "透明（本条不染色，优先于项目颜色）";
+        noneSw.addEventListener("click", () => {
+          const m = readTaskMap();
+          m[key] = -1;
+          writeTaskMap(m);
+          pass(document);
+          markCurrent(grid, -1);
+        });
+        grid.appendChild(noneSw);
         const auto = document.createElement("div");
         auto.className = "zc-pt-swatch zc-pt-auto";
         auto.textContent = "自";
@@ -1229,7 +1272,7 @@
         true,
       );
       window.__zcPrism = {
-        version: 8,
+        version: 9,
         pass,
         openPicker,
         openTaskPicker,
