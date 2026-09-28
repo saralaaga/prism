@@ -29,7 +29,7 @@
         "en": "Per-project colors, icons and display names for the desktop sidebar.",
         "zh-CN": "为桌面端侧边栏的每个项目提供专属颜色、图标与显示名。"
       },
-      "version": "0.3.1",
+      "version": "0.3.2",
       "author": {
         "name": "Carlos"
       },
