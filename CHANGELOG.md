@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [0.4.0] — 2026-09-28
+
+渲染层 shim 升级到 v11。
+
+### 新增
+
+- **插件设置页**：manifest 声明 `userConfig`（压暗对话标题、调亮思考扫光、自动配色、按最近活跃排序四个开关），出现在 ZCode 插件管理的配置页中。设置页提供默认值、会话启动时经钩子烘入渲染层；取色盘开关为即时覆盖层，优先级更高。
+- SessionStart 钩子附带配置可达性探针（记录于 `~/.zcode/prism-state.json` 的 `configProbe`），用于确认客户端向钩子暴露 userConfig 的实际通道。
+
 ## [0.3.2] — 2026-09-28
 
 渲染层 shim 升级到 v10。
