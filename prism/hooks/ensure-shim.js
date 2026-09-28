@@ -14,7 +14,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "v6";
+const VERSION = "v8";
 const INJECT_RE = /<script>\/\* zc-[a-z-]+[\s\S]*?<\/script>\n?/g;
 const LEGACY_ENVELOPE_RE = /<script>\/\* zc-(?:project-tint|prism)\b/;
 const STATE_FILE = path.join(os.homedir(), ".zcode", "prism-state.json");

@@ -1,6 +1,7 @@
-// zc-prism v6 (installed by the Prism plugin for ZCode)
-// Per-project color + icon for the ZCode desktop sidebar, with a right-click
-// picker on project headers. Everything here runs inside the production
+// zc-prism v8 (installed by the Prism plugin for ZCode)
+// Per-project AND per-conversation color + icon for the ZCode desktop
+// sidebar, a right-click picker on project headers, and an opt-out recency
+// ordering for every sidebar view. Everything here runs inside the production
 // renderer and must never break the app: every entry point is defensive.
 // Icons are Lucide path data extracted from the app's own renderer chunks.
 (() => {
@@ -98,8 +99,49 @@
     function aliasFor(p) {
       return readAliasMap()[p] || leafOf(p);
     }
+    // Per-conversation hue overrides, keyed by "<workspacePath>\u0000<taskId>"
+    // — the canonical form both row shapes normalize to (project/timeline rows
+    // carry "path:taskId", grouped rows carry encodeURIComponent(path\0taskId)).
+    const TASK_STORE_KEY = "zcProjectTint.tasks.v1";
+    function readTaskMap() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(TASK_STORE_KEY) || "{}");
+        return raw && typeof raw === "object" ? raw : {};
+      } catch (_) {
+        return {};
+      }
+    }
+    function writeTaskMap(map) {
+      try {
+        localStorage.setItem(TASK_STORE_KEY, JSON.stringify(map));
+      } catch (_) {}
+    }
+    function taskKeyOf(el) {
+      const k = el.getAttribute("data-task-item-key");
+      if (k) {
+        const cut = k.lastIndexOf(":");
+        return cut > 0 ? k.slice(0, cut) + "\u0000" + k.slice(cut + 1) : null;
+      }
+      const g = el.getAttribute("data-grouped-task-key");
+      if (g) {
+        try {
+          const d = decodeURIComponent(g);
+          return d.indexOf("\u0000") > 0 ? d : null;
+        } catch (_) {
+          return null;
+        }
+      }
+      return null;
+    }
+    function taskTitleOf(el) {
+      const lb = el.querySelector("span.truncate");
+      return lb ? (lb.textContent || "").trim() : "";
+    }
     const SETTINGS_KEY = "zcPrism.settings.v1";
-    const DEFAULT_SETTINGS = { dimTitles: true, brightenThinking: true };
+    // autoColor: hash-based hue for projects without a manual pick — off by
+    // default, a hue is only ever applied when explicitly picked or opted in.
+    // groupRecency: display-only recency ordering for the grouped view.
+    const DEFAULT_SETTINGS = { dimTitles: true, brightenThinking: true, autoColor: false, groupRecency: true };
     function readSettings() {
       try {
         return Object.assign({}, DEFAULT_SETTINGS, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
@@ -130,10 +172,12 @@
       }
       if (st.brightenThinking) {
         // the shimmer sweep animates the --animated-gradient-text-soft stop,
-        // which is only 20% white in dark themes; lift it to 50% of the strong
-        // color so the pulse stays theme-correct but clearly visible
+        // which is only ~20% white in dark themes; lift it to 65% of the strong
+        // color so the pulse stays theme-correct but clearly visible. Also
+        // covers .cua-group-gradient-text (computer-use streaming label),
+        // which sweeps the same two variables.
         rules.push(
-          ".animated-gradient-text { --animated-gradient-text-soft: color-mix(in oklab, var(--animated-gradient-text-strong) 50%, transparent) !important; }",
+          ":is(.animated-gradient-text, .cua-group-gradient-text) { --animated-gradient-text-soft: color-mix(in oklab, var(--animated-gradient-text-strong) 65%, transparent) !important; }",
         );
       }
       el.textContent = rules.join("\n");
@@ -156,10 +200,12 @@
     }
     function hueFor(path) {
       const v = readMap()[path];
-      return typeof v === "number" ? v : autoHue(path);
+      if (typeof v === "number") return v;
+      return readSettings().autoColor ? autoHue(path) : null;
     }
     function hueColor(path) {
-      return "hsl(" + hueFor(path) + " 70% 55%)";
+      const h = hueFor(path);
+      return h === null ? null : "hsl(" + h + " 70% 55%)";
     }
 
     function projectOfRow(el) {
@@ -195,9 +241,9 @@
         if (holder) holder.style.display = "";
         return;
       }
-      const color = hueColor(path);
+      const color = hueColor(path); // null → keep the app's foreground color
       if (holder) holder.style.display = "none";
-      const wantKey = iconId + "|" + color;
+      const wantKey = iconId + "|" + (color || "");
       let el = mine;
       if (el && el.dataset.zc === wantKey) return;
       if (!el) {
@@ -208,8 +254,8 @@
       }
       el.dataset.zc = wantKey;
       el.style.cssText =
-        "display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex:none;color:" +
-        color;
+        "display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex:none" +
+        (color ? ";color:" + color : "");
       el.innerHTML =
         '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
         iconInner(iconId) +
@@ -243,18 +289,348 @@
       }
     }
 
+    // ---- sidebar recency ordering (display-only, all views) ----
+    // The sidebar orders things manually (dragged groups/projects) or by join
+    // time; this floats recently-active conversations to the top WITHOUT
+    // touching any persisted order — purely CSS `order` on flexed containers,
+    // so toggling off restores the native order byte-for-byte. Times come
+    // from each task object (lastActivityAt/updatedAt), read ONLY through the
+    // React fiber pointer React leaves on row DOM nodes.
+    //
+    // Three shapes of list are recognized, each validation-gated so an
+    // unrecognized DOM simply stays native:
+    //   1. grouped view top level: group wrappers + loose rows (by recency)
+    //   2. row containers whose children are ALL rows → sorted directly
+    //   3. containers mixing headers and rows → segmented: each header keeps
+    //      its following rows; segments ranked by their newest row
+    // Project *sections* (header + row-list wrappers) are then ranked among
+    // their siblings by their newest row, but only when the wrapper shape is
+    // unambiguous (exactly one header inside).
+    const recencyFlex = new Set();
+    let recencyState = "off";
+    function setRecencyState(s) {
+      if (recencyState === s) return;
+      recencyState = s;
+      try {
+        console.info("[zc-prism] recency: " + s);
+      } catch (_) {}
+    }
+    function taskTimeOf(rowEl) {
+      try {
+        let fiber = null;
+        for (const k of Object.keys(rowEl)) {
+          if (k.indexOf("__reactFiber$") === 0) {
+            fiber = rowEl[k];
+            break;
+          }
+        }
+        for (let hops = 0; fiber && hops < 12; hops++, fiber = fiber.return) {
+          const p = fiber.memoizedProps;
+          if (!p) continue;
+          const t = typeof p.task === "object" && p.task ? p.task : typeof p === "object" && typeof p.taskId === "string" && typeof p.updatedAt === "number" ? p : null;
+          if (!t) continue;
+          const v = typeof t.lastActivityAt === "number" ? t.lastActivityAt : t.updatedAt;
+          if (typeof v === "number" && Number.isFinite(v)) return v;
+        }
+      } catch (_) {}
+      return NaN;
+    }
+    function rowRootWithin(rowEl, container) {
+      let root = rowEl;
+      while (root.parentElement && root.parentElement !== container) root = root.parentElement;
+      return root.parentElement === container ? root : null;
+    }
+    function setOrder(el, ord) {
+      if (el.dataset.zcPtOrd === ord) return;
+      el.dataset.zcPtOrd = ord;
+      el.style.order = ord;
+    }
+    function flexColumn(el) {
+      if (el.dataset.zcPtFlex !== "1") {
+        el.dataset.zcPtFlex = "1";
+        el.style.display = "flex";
+        el.style.flexDirection = "column";
+      }
+      recencyFlex.add(el);
+    }
+    const recencyTime = (e) => (Number.isFinite(e.time) ? e.time : -Infinity);
+    // key entries: {el, time, pos}, ranked newest first, ties keep DOM order.
+    // Non-keyed children keep their top/bottom bands: those before the first
+    // keyed child (draft inputs, pinned blocks) order -1, those after 9999.
+    function orderChildren(container, keyed) {
+      let anyTime = false;
+      for (const k of keyed) if (Number.isFinite(k.time)) anyTime = true;
+      if (!anyTime) return false;
+      const isKeyed = new Set(keyed.map((k) => k.el));
+      const kids = Array.prototype.slice.call(container.children);
+      let firstKeyed = -1;
+      for (let i = 0; i < kids.length; i++) if (isKeyed.has(kids[i])) { firstKeyed = i; break; }
+      const sorted = keyed.slice().sort((a, b) => recencyTime(b) - recencyTime(a) || a.pos - b.pos);
+      flexColumn(container);
+      for (let i = 0; i < kids.length; i++) {
+        if (!isKeyed.has(kids[i])) setOrder(kids[i], i < firstKeyed ? "-1" : "9999");
+      }
+      sorted.forEach((k, i) => setOrder(k.el, String(i)));
+      return true;
+    }
+    // A container mixing header-ish blocks with rows: each block "owns" the
+    // rows that follow it (a segment); segments ranked by newest row, rows
+    // sorted within their segment. Rank slots are 1000 apart so a segment's
+    // header + rows stay contiguous after reordering.
+    function orderSegments(container, children) {
+      const isRow = (el) => el.matches(ROW_SELECTOR);
+      const segments = [];
+      for (const ch of children) {
+        if (isRow(ch)) {
+          // a row belongs to the segment opened by the block before it
+          if (!segments.length) segments.push({ head: null, headIsBlock: false, rows: [] });
+          segments[segments.length - 1].rows.push(ch);
+          continue;
+        }
+        segments.push({ head: ch, headIsBlock: true, rows: [] });
+      }
+      if (segments.length < 2 && segments[0] && !segments[0].headIsBlock) return false;
+      const keyed = [];
+      const pinnedTop = [];
+      for (const seg of segments) {
+        if (!seg.headIsBlock) {
+          seg.rows.forEach((r, i) => {
+            keyed.push({ el: r, time: taskTimeOf(r), seg, pos: i });
+          });
+          continue;
+        }
+        if (!seg.head.matches(HEADER_SELECTOR) && seg.rows.length === 0) {
+          pinnedTop.push(seg.head); // separators/drafts with no rows: keep on top
+          continue;
+        }
+        let best = NaN;
+        seg.rows.forEach((r, i) => {
+          const t = taskTimeOf(r);
+          keyed.push({ el: r, time: t, seg, pos: i });
+          if (Number.isFinite(t) && (Number.isNaN(best) || t > best)) best = t;
+        });
+        keyed.push({ el: seg.head, time: best, seg });
+      }
+      let anyTime = false;
+      for (const k of keyed) if (Number.isFinite(k.time) && k.el !== k.seg.head) anyTime = true;
+      if (!anyTime) return false;
+      const bySeg = new Map();
+      for (const k of keyed) {
+        if (k.el === k.seg.head) continue;
+        const prev = bySeg.get(k.seg);
+        if (!prev || (Number.isFinite(k.time) && (Number.isNaN(prev) || k.time > prev))) bySeg.set(k.seg, k.time);
+      }
+      const segs = Array.from(bySeg.keys());
+      const sortedSegs = segs.slice().sort((a, b) => {
+        const ta = bySeg.get(a), tb = bySeg.get(b);
+        const fa = Number.isFinite(ta) ? ta : -Infinity;
+        const fb = Number.isFinite(tb) ? tb : -Infinity;
+        return fb - fa || segs.indexOf(a) - segs.indexOf(b);
+      });
+      const rank = new Map(sortedSegs.map((s, i) => [s, i * 1000]));
+      flexColumn(container);
+      for (const el of pinnedTop) setOrder(el, "-1");
+      // rows within a segment ranked by their own recency, newest first
+      const rowsBySeg = new Map();
+      for (const k of keyed) {
+        if (k.el === k.seg.head) continue;
+        if (!rowsBySeg.has(k.seg)) rowsBySeg.set(k.seg, []);
+        rowsBySeg.get(k.seg).push(k);
+      }
+      for (const [seg, list] of rowsBySeg) {
+        const base = rank.get(seg) || 0;
+        list.sort((a, b) => recencyTime(b) - recencyTime(a) || a.pos - b.pos);
+        list.forEach((k, i) => setOrder(k.el, String(base + 1 + i)));
+      }
+      for (const seg of segs) {
+        if (seg.head) setOrder(seg.head, String(rank.get(seg) || 0));
+      }
+      return true;
+    }
+    function removeGroupRecency() {
+      for (const el of recencyFlex) {
+        if (!el.isConnected) continue;
+        try {
+          if (el.dataset.zcPtFlex === "1") {
+            el.style.display = "";
+            el.style.flexDirection = "";
+            delete el.dataset.zcPtFlex;
+          }
+          for (const ch of el.children) {
+            ch.style.order = "";
+            delete ch.dataset.zcPtOrd;
+          }
+        } catch (_) {}
+      }
+      recencyFlex.clear();
+    }
+    function applyRecency(root) {
+      if (!readSettings().groupRecency) {
+        setRecencyState("off");
+        if (recencyFlex.size) removeGroupRecency();
+        return;
+      }
+      const rows = root.querySelectorAll(ROW_SELECTOR);
+      if (!rows.length) {
+        setRecencyState("sidebar-hidden");
+        if (recencyFlex.size) removeGroupRecency();
+        return;
+      }
+      const anchor = root.querySelector("[data-grouped-layout-key]");
+      let applied = 0;
+      // 1) grouped view top level: groups + loose rows ranked by newest task
+      if (anchor) {
+        const top = anchor.parentElement;
+        if (top && top !== document.body && top !== anchor) {
+          let virtual = false;
+          for (const ch of top.children) {
+            if (ch.hasAttribute("data-index")) { virtual = true; break; }
+          }
+          if (virtual) {
+            if (recencyFlex.size) removeGroupRecency();
+            setRecencyState("virtualized-list-skipped");
+            return;
+          }
+          const keyedTop = [];
+          let pos = 0;
+          let anyTime = false;
+          for (const ch of top.children) {
+            if (ch.hasAttribute("data-grouped-layout-key")) {
+              let best = NaN;
+              const grows = ch.querySelectorAll("[data-grouped-task-key]");
+              if (grows.length) {
+                // rows sit a few wrappers deep inside the group; the task-list
+                // container is the group wrapper's direct ancestor of row #1
+                const listEl = rowRootWithin(grows[0], ch);
+                const roots = new Map();
+                let okList = !!listEl;
+                for (const r of grows) {
+                  const t = taskTimeOf(r);
+                  if (Number.isFinite(t)) {
+                    anyTime = true;
+                    if (Number.isNaN(best) || t > best) best = t;
+                  }
+                  const rootEl = listEl && rowRootWithin(r, listEl);
+                  if (!rootEl) {
+                    okList = false;
+                    continue;
+                  }
+                  const prev = roots.get(rootEl);
+                  if (!prev || (!Number.isFinite(prev.time) && Number.isFinite(t)) || t > prev.time) {
+                    roots.set(rootEl, { el: rootEl, time: t, pos: prev ? prev.pos : roots.size });
+                  }
+                }
+                if (okList && roots.size && orderChildren(listEl, Array.from(roots.values()))) applied++;
+              }
+              keyedTop.push({ el: ch, time: best, pos: pos++ });
+              continue;
+            }
+            const row = ch.matches("[data-grouped-task-key]") ? ch : ch.querySelector("[data-grouped-task-key]");
+            if (row) {
+              const t = taskTimeOf(row);
+              if (Number.isFinite(t)) anyTime = true;
+              keyedTop.push({ el: ch, time: t, pos: pos++ });
+            } else {
+              setOrder(ch, "-1");
+            }
+          }
+          if (anyTime && orderChildren(top, keyedTop)) applied++;
+        }
+      }
+      // 2) project/timeline containers (li rows — their parentElement IS the
+      //    list): sort all-row containers directly, segmented ones by block
+      const byParent = new Map();
+      for (const r of rows) {
+        if (!r.hasAttribute("data-task-item-key")) continue; // grouped rows done above
+        const p = r.parentElement;
+        if (!p) continue;
+        if (!byParent.has(p)) byParent.set(p, []);
+        byParent.get(p).push(r);
+      }
+      for (const [parent, list] of byParent) {
+        if (list.length < 2) continue;
+        const kids = Array.prototype.slice.call(parent.children);
+        const rowSet = new Set(list);
+        const hasHeaderKid = kids.some((k) => !rowSet.has(k) && k.matches && k.matches(HEADER_SELECTOR));
+        if (anchor && !hasHeaderKid) continue; // grouped top level already handled
+        let allRows = true;
+        for (const k of kids) {
+          if (!rowSet.has(k) && (k.matches ? !k.matches(ROW_SELECTOR) : true)) { allRows = false; break; }
+        }
+        let ok = false;
+        try {
+          ok = allRows ? orderChildren(parent, list.map((el, i) => ({ el, time: taskTimeOf(el), pos: i }))) : orderSegments(parent, kids);
+        } catch (_) {}
+        if (ok) applied++;
+      }
+      // 3) project sections: rank header+list wrappers among their siblings
+      let sectionsRanked = 0;
+      if (!anchor) {
+        const secByParent = new Map();
+        for (const h of root.querySelectorAll(HEADER_SELECTOR)) {
+          let S = null;
+          let node = h;
+          for (let up = 0; node && up < 8; up++, node = node.parentElement) {
+            if (node === document.body) break;
+            if (node.querySelector(ROW_SELECTOR)) {
+              if (node.querySelectorAll(HEADER_SELECTOR).length === 1) S = node;
+              break;
+            }
+          }
+          if (!S || !S.parentElement) continue;
+          const p = S.parentElement;
+          if (!secByParent.has(p)) secByParent.set(p, []);
+          secByParent.get(p).push({ S, h });
+        }
+        for (const [p, list] of secByParent) {
+          if (list.length < 2) continue;
+          const keyed = [];
+          let anyTime = false;
+          for (const { S } of list) {
+            let best = NaN;
+            for (const r of S.querySelectorAll("[data-task-item-key]")) {
+              const t = taskTimeOf(r);
+              if (Number.isFinite(t)) {
+                anyTime = true;
+                if (Number.isNaN(best) || t > best) best = t;
+              }
+            }
+            keyed.push({ el: S, time: best, pos: keyed.length });
+          }
+          if (anyTime && orderChildren(p, keyed)) sectionsRanked++;
+        }
+      }
+      if (applied || sectionsRanked) {
+        setRecencyState("applied: containers=" + applied + " sections=" + sectionsRanked);
+      } else {
+        setRecencyState("no-recognizable-list");
+        if (recencyFlex.size) removeGroupRecency();
+      }
+    }
+
     function pass(root) {
       const map = readMap();
       const rows = root.querySelectorAll(ROW_SELECTOR);
       const aliasMap = readAliasMap();
+      const st = readSettings();
+      const taskMap = readTaskMap();
       for (const el of rows) {
         const path = projectOfRow(el);
         if (!path) continue;
-        const v = map[path];
-        const want = String(typeof v === "number" ? v : autoHue(path));
+        const tk = taskKeyOf(el);
+        const tv = tk !== null ? taskMap[tk] : undefined;
+        const v = typeof tv === "number" ? tv : map[path];
+        const on = typeof v === "number" || st.autoColor;
+        const want = on ? String(typeof v === "number" ? v : autoHue(path)) : "off";
         if (el.dataset.zcPtH === want) continue;
         el.dataset.zcPtH = want;
-        el.style.setProperty("--zc-pt-h", want.split(".")[0]);
+        if (on) {
+          el.style.setProperty("--zc-pt-h", want.split(".")[0]);
+          el.dataset.zcPtOn = "1";
+        } else {
+          el.style.removeProperty("--zc-pt-h");
+          delete el.dataset.zcPtOn;
+        }
       }
       // timeline rows show the workspace leaf name in a span.truncate; swap in
       // the alias when one is set. Text nodes are edited in place (nodeValue),
@@ -295,10 +671,17 @@
         const path = projectOfHeader(el);
         if (!path) continue;
         const v = map[path];
-        const want = String(typeof v === "number" ? v : autoHue(path));
+        const on = typeof v === "number" || st.autoColor;
+        const want = on ? String(typeof v === "number" ? v : autoHue(path)) : "off";
         if (el.dataset.zcPtH !== want) {
           el.dataset.zcPtH = want;
-          el.style.setProperty("--zc-pt-h", want.split(".")[0]);
+          if (on) {
+            el.style.setProperty("--zc-pt-h", want.split(".")[0]);
+            el.dataset.zcPtOn = "1";
+          } else {
+            el.style.removeProperty("--zc-pt-h");
+            delete el.dataset.zcPtOn;
+          }
         }
         try {
           syncHeaderIcon(el, path);
@@ -308,7 +691,10 @@
         } catch (_) {}
       }
       try {
-        enhanceProjectMenus();
+        enhanceMenus();
+      } catch (_) {}
+      try {
+        applyRecency(root || document);
       } catch (_) {}
     }
 
@@ -318,17 +704,17 @@
       style.id = "zc-prism-style";
       style.textContent = [
         "li[data-task-item-key], div[data-grouped-task-key] { position: relative; }",
-        "li[data-task-item-key]::before, div[data-grouped-task-key]::before {",
+        "li[data-task-item-key][data-zc-pt-on]::before, div[data-grouped-task-key][data-zc-pt-on]::before {",
         "  content: \"\"; position: absolute; inset: 0; border-radius: inherit;",
         "  background: hsl(var(--zc-pt-h, 0) 70% 55% / 0.09);",
         "  pointer-events: none; }",
-        "li[data-task-item-key]::after, div[data-grouped-task-key]::after {",
+        "li[data-task-item-key][data-zc-pt-on]::after, div[data-grouped-task-key][data-zc-pt-on]::after {",
         "  content: \"\"; position: absolute; left: 1px; top: 50%; transform: translateY(-50%);",
         "  width: 3px; height: 60%; border-radius: 2px;",
         "  background: hsl(var(--zc-pt-h, 0) 70% 60% / 0.55);",
         "  pointer-events: none; }",
         HEADER_SELECTOR + " { position: relative; }",
-        HEADER_SELECTOR + "::before {",
+        HEADER_SELECTOR + "[data-zc-pt-on]::before {",
         "  content: \"\"; position: absolute; inset: 0; border-radius: inherit;",
         "  background: hsl(var(--zc-pt-h, 0) 60% 50% / 0.06);",
         "  pointer-events: none; }",
@@ -471,8 +857,9 @@
       }
     }
 
-    // ---- native "..." menu enhancement ----
+    // ---- native "..." menu / context menu enhancement ----
     let pendingProject = null;
+    let pendingTask = null;
     function dismissNativeMenu(menuEl) {
       // React attaches its listeners at the root container, so an Escape
       // dispatched on `document` never reaches the menu; dispatched on the
@@ -501,21 +888,28 @@
         } catch (_) {}
       }, 80);
     }
-    function enhanceProjectMenus() {
+    function enhanceMenus() {
       const menus = document.querySelectorAll('[role="menu"]:not([data-zc-pt-menu])');
       if (!menus.length) return;
-      if (!pendingProject || Date.now() - pendingProject.at > 4000) return;
+      const now = Date.now();
+      const task = pendingTask && now - pendingTask.at < 4000 ? pendingTask : null;
+      const proj = !task && pendingProject && now - pendingProject.at < 4000 ? pendingProject : null;
+      if (!task && !proj) return;
       for (const menuEl of menus) {
         let template = null;
+        const wantTask = task && !proj;
+        const kw = wantTask ? /移除|归档|置顶|固定|重命名|删除|移到/ : /移除/;
         for (const it of menuEl.querySelectorAll('[role="menuitem"]')) {
-          if ((it.textContent || "").indexOf("移除") !== -1) {
+          if ((it.textContent || "").search(kw) !== -1) {
             template = it;
             break;
           }
         }
+        if (!template && wantTask) {
+          template = menuEl.querySelector('[role="menuitem"]');
+        }
         if (!template) continue;
-        const path = pendingProject.path;
-        menuEl.dataset.zcPtMenu = path;
+        menuEl.dataset.zcPtMenu = wantTask ? task.key : proj.path;
         const mk = (label, iconId, fn) => {
           const el = template.cloneNode(true);
           el.setAttribute("data-zc-pt-item", "1");
@@ -532,12 +926,17 @@
           el.addEventListener("click", (ev) => {
             ev.stopPropagation();
             dismissNativeMenu(menuEl);
-            fn(path, ev.clientX || 200, ev.clientY || 200);
+            if (wantTask) fn(task.key, task.title, ev.clientX || 200, ev.clientY || 200);
+            else fn(proj.path, ev.clientX || 200, ev.clientY || 200);
           });
           return el;
         };
-        menuEl.appendChild(mk("调整颜色", "palette", openPicker));
-        menuEl.appendChild(mk("重命名", "pen-tool", openRename));
+        if (wantTask) {
+          menuEl.appendChild(mk("调整颜色（此对话）", "palette", openTaskPicker));
+        } else {
+          menuEl.appendChild(mk("调整颜色", "palette", openPicker));
+          menuEl.appendChild(mk("重命名", "pen-tool", openRename));
+        }
       }
     }
 
@@ -582,7 +981,9 @@
         auto.className = "zc-pt-swatch zc-pt-auto";
         auto.textContent = "自";
         auto.dataset.v = "auto";
-        auto.title = "恢复自动配色（按路径哈希）";
+        auto.title = readSettings().autoColor
+          ? "恢复自动配色（按路径哈希）"
+          : "清除颜色（自动配色当前关闭）";
         auto.addEventListener("click", () => {
           const map = readMap();
           delete map[path];
@@ -643,6 +1044,8 @@
         for (const tg of [
           { key: "dimTitles", label: "压暗对话标题" },
           { key: "brightenThinking", label: "调亮思考动画" },
+          { key: "autoColor", label: "自动配色（未指定的项目）" },
+          { key: "groupRecency", label: "侧边栏按最近活跃排序" },
         ]) {
           const row = document.createElement("div");
           row.className = "zc-pt-tg";
@@ -658,6 +1061,7 @@
             cur[tg.key] = !cur[tg.key];
             writeSettings(cur);
             applySettingsStyle();
+            pass(document); // reapplies or tears down the recency ordering
             row.dataset.on = cur[tg.key] ? "1" : "0";
           });
           menu.appendChild(row);
@@ -673,6 +1077,70 @@
       } catch (err) {
         try {
           console.error("[zc-prism] picker", err);
+        } catch (_) {}
+      }
+    }
+
+    // Per-conversation picker: overrides the color of a single conversation
+    // row; "自" clears the override so the row follows its project again.
+    function openTaskPicker(key, title, x, y) {
+      try {
+        if (!key) return;
+        closeMenu();
+        injectStyle();
+        menu = document.createElement("div");
+        menu.className = "zc-pt-menu";
+        const cap = document.createElement("div");
+        cap.className = "zc-pt-title";
+        cap.textContent = title || "此对话";
+        menu.appendChild(cap);
+        const hint = document.createElement("div");
+        hint.className = "zc-pt-sep";
+        hint.style.margin = "0 0 8px";
+        hint.textContent = "只影响这一条对话，未选时跟随项目";
+        menu.appendChild(hint);
+        const grid = document.createElement("div");
+        grid.className = "zc-pt-grid";
+        for (const h of HUES) {
+          const sw = document.createElement("div");
+          sw.className = "zc-pt-swatch";
+          sw.style.background = "hsl(" + h + " 70% 55%)";
+          sw.dataset.v = String(h);
+          sw.title = "色相 " + h;
+          sw.addEventListener("click", () => {
+            const m = readTaskMap();
+            m[key] = h;
+            writeTaskMap(m);
+            pass(document);
+            markCurrent(grid, h);
+          });
+          grid.appendChild(sw);
+        }
+        const auto = document.createElement("div");
+        auto.className = "zc-pt-swatch zc-pt-auto";
+        auto.textContent = "自";
+        auto.dataset.v = "auto";
+        auto.title = "清除对话颜色，恢复跟随项目";
+        auto.addEventListener("click", () => {
+          const m = readTaskMap();
+          delete m[key];
+          writeTaskMap(m);
+          pass(document);
+          markCurrent(grid, "auto");
+        });
+        grid.appendChild(auto);
+        menu.appendChild(grid);
+        markCurrent(grid, String(readTaskMap()[key] ?? "auto"));
+        document.body.appendChild(menu);
+        const r = menu.getBoundingClientRect();
+        menu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
+        menu.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
+        document.addEventListener("pointerdown", onDocPointer, true);
+        document.addEventListener("keydown", onDocKey, true);
+        document.addEventListener("contextmenu", onMenuCtx, true);
+      } catch (err) {
+        try {
+          console.error("[zc-prism] task picker", err);
         } catch (_) {}
       }
     }
@@ -728,24 +1196,51 @@
       applySettingsStyle();
       pass(document);
       observer.observe(document.body, { childList: true, subtree: true });
-      // remember which project header was last interacted with, so the
-      // native "..." dropdown can be enhanced with our entries when it opens
+      try {
+        console.info("[zc-prism] v8 loaded");
+      } catch (_) {}
+      // remember what was last interacted with, so the native menus can be
+      // enhanced with our entries when they open (project header "..." menu →
+      // project color/rename; row context menu → per-conversation color)
       document.addEventListener(
         "pointerdown",
         (e) => {
           try {
             const t = e.target instanceof Element ? e.target : null;
             if (!t) return;
+            const row = t.closest(ROW_SELECTOR);
+            if (row) {
+              const key = taskKeyOf(row);
+              if (key) {
+                pendingTask = { key, title: taskTitleOf(row), at: Date.now() };
+                return;
+              }
+            }
             const header = t.closest(HEADER_SELECTOR);
             if (header) {
               const p = projectOfHeader(header);
-              if (p) pendingProject = { path: p, at: Date.now() };
+              if (p) {
+                pendingProject = { path: p, at: Date.now() };
+                pendingTask = null;
+              }
             }
           } catch (_) {}
         },
         true,
       );
-      window.__zcPrism = { version: 6, pass, openPicker, openRename };
+      window.__zcPrism = {
+        version: 8,
+        pass,
+        openPicker,
+        openTaskPicker,
+        openRename,
+        applyRecency,
+        removeGroupRecency,
+        taskKeyOf,
+        get recencyState() {
+          return recencyState;
+        },
+      };
     }
 
     if (document.body) start();
