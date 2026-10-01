@@ -1280,14 +1280,19 @@
               if (p) {
                 pendingProject = { path: p, at: Date.now() };
                 pendingTask = null;
+                return;
               }
             }
+            // Press anywhere else: drop the pending target, so a menu opened
+            // from it (account popup, model picker, …) never inherits one.
+            pendingTask = null;
+            pendingProject = null;
           } catch (_) {}
         },
         true,
       );
       window.__zcPrism = {
-        version: 11,
+        version: 12,
         pass,
         openPicker,
         openTaskPicker,

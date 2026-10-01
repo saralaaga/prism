@@ -26,14 +26,10 @@ const WANT = [
 
 function parseShapes(src) {
   const out = [];
-  const re = /\[`([a-z]+)`,\{([^[\]]*)\}\]/g;
-  let m;
-  while ((m = re.exec(src))) {
+  for (const m of src.matchAll(/\[`([a-z]+)`,\{([^[\]]*)\}\]/g)) {
     const tag = m[1];
     const attrs = {};
-    const are = /([a-zA-Z]+):`([^`]*)`/g;
-    let a;
-    while ((a = are.exec(m[2]))) attrs[a[1]] = a[2];
+    for (const a of m[2].matchAll(/([a-zA-Z]+):`([^`]*)`/g)) attrs[a[1]] = a[2];
     out.push({ tag, attrs });
   }
   return out;

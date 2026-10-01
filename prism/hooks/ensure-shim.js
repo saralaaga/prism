@@ -14,7 +14,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "v11";
+const VERSION = "v12";
 const INJECT_RE = /<script>\/\* zc-[a-z-]+[\s\S]*?<\/script>\n?/g;
 const LEGACY_ENVELOPE_RE = /<script>\/\* zc-(?:project-tint|prism)\b/;
 const STATE_FILE = path.join(os.homedir(), ".zcode", "prism-state.json");
@@ -66,7 +66,7 @@ function readPluginConfig() {
   const raw = {};
   try {
     for (const [k, v] of Object.entries(process.env)) {
-      const m = /^(?:ZCODE_PLUGIN_CONFIG|USER_CONFIG)[_-](.+)$/.exec(k);
+      const m = k.match(/^(?:ZCODE_PLUGIN_CONFIG|USER_CONFIG)[_-](.+)$/);
       if (m) raw[m[1].replace(/[_-](\w)/g, (_, c) => c.toUpperCase()).toLowerCase()] = v;
     }
   } catch (_) {}
