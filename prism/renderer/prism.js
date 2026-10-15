@@ -1,8 +1,10 @@
-// zc-prism v11 (installed by the Prism plugin for ZCode)
+// zc-prism v13 (installed by the Prism plugin for ZCode)
 // Per-project AND per-conversation color + icon for the ZCode desktop
-// sidebar, a right-click picker on project headers, and an opt-out recency
-// ordering for every sidebar view. Everything here runs inside the production
-// renderer and must never break the app: every entry point is defensive.
+// sidebar, per-automation color on the Automations page (defaulting to the
+// automation's project color), a right-click picker on project headers, and
+// an opt-out recency ordering for every sidebar view. Everything here runs
+// inside the production renderer and must never break the app: every entry
+// point is defensive.
 // Icons are Lucide path data extracted from the app's own renderer chunks.
 (() => {
   try {
@@ -13,6 +15,10 @@
     const HEADER_PREFIX = "workspace-item-";
     const ROW_SELECTOR = "li[data-task-item-key], div[data-grouped-task-key]";
     const HEADER_SELECTOR = 'div[data-testid^="' + HEADER_PREFIX + '"]';
+    // Automation cards on the Automations page (a workspace-scoped main view,
+    // NOT the sidebar). The card element is keyed by its automationId, which
+    // the React fiber preserves — that key is our stable per-card identity.
+    const AUTOMATION_SELECTOR = 'div[data-testid="automation-card"]';
     const HUES = [0, 25, 50, 95, 140, 165, 190, 215, 240, 270, 300, 330];
     const ICONS = {
   "code-xml": "<path d=\"m18 16 4-4-4-4\"/><path d=\"m6 8-4 4 4 4\"/><path d=\"m14.5 4-5 16\"/>",
@@ -136,6 +142,61 @@
     function taskTitleOf(el) {
       const lb = el.querySelector("span.truncate");
       return lb ? (lb.textContent || "").trim() : "";
+    }
+    function reactFiberOf(el) {
+      try {
+        for (const k of Object.keys(el)) {
+          if (k.indexOf("__reactFiber$") === 0) return el[k];
+        }
+      } catch (_) {}
+      return null;
+    }
+    // Per-automation hue overrides on the Automations page, keyed by
+    // automationId (the card element's React key). Cards only render inside a
+    // workspace-scoped view, so with no override a card follows its project's
+    // color — resolved by walking the fiber chain up to the view component,
+    // whose props carry the workspace path.
+    const AUTO_STORE_KEY = "zcProjectTint.automations.v1";
+    function readAutoMap() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(AUTO_STORE_KEY) || "{}");
+        return raw && typeof raw === "object" ? raw : {};
+      } catch (_) {
+        return {};
+      }
+    }
+    function writeAutoMap(map) {
+      try {
+        localStorage.setItem(AUTO_STORE_KEY, JSON.stringify(map));
+      } catch (_) {}
+    }
+    function automationIdOf(cardEl) {
+      const f = reactFiberOf(cardEl);
+      const k = f && typeof f.key === "string" ? f.key : "";
+      return k || null;
+    }
+    function automationTitleOf(cardEl) {
+      return taskTitleOf(cardEl);
+    }
+    function automationProjectOf(cardEl) {
+      let fiber = reactFiberOf(cardEl);
+      for (let hops = 0; fiber && hops < 40; hops++, fiber = fiber.return) {
+        const p = fiber.memoizedProps;
+        if (p && typeof p === "object" && typeof p.workspacePath === "string" && p.workspacePath) {
+          return p.workspacePath;
+        }
+      }
+      return null;
+    }
+    function automationHue(cardEl) {
+      const id = automationIdOf(cardEl);
+      const v = id ? readAutoMap()[id] : undefined;
+      if (typeof v === "number") return v === -1 ? null : v; // -1 = explicit transparent
+      const path = automationProjectOf(cardEl);
+      if (!path) return null;
+      const pv = readMap()[path];
+      if (typeof pv === "number") return pv === -1 ? null : pv;
+      return readSettings().autoColor ? autoHue(path) : null;
     }
     const SETTINGS_KEY = "zcPrism.settings.v1";
     // autoColor: hash-based hue for projects without a manual pick — off by
@@ -324,13 +385,7 @@
     }
     function taskTimeOf(rowEl) {
       try {
-        let fiber = null;
-        for (const k of Object.keys(rowEl)) {
-          if (k.indexOf("__reactFiber$") === 0) {
-            fiber = rowEl[k];
-            break;
-          }
-        }
+        let fiber = reactFiberOf(rowEl);
         for (let hops = 0; fiber && hops < 12; hops++, fiber = fiber.return) {
           const p = fiber.memoizedProps;
           if (!p) continue;
@@ -707,6 +762,23 @@
           syncHeaderAlias(el, path);
         } catch (_) {}
       }
+      // Automations page cards: explicit per-automation hue, else the color of
+      // the project the automation belongs to (same precedence as rows).
+      for (const el of root.querySelectorAll(AUTOMATION_SELECTOR)) {
+        try {
+          const v = automationHue(el);
+          const want = typeof v === "number" ? String(v) : "off";
+          if (el.dataset.zcPtH === want) continue;
+          el.dataset.zcPtH = want;
+          if (typeof v === "number") {
+            el.style.setProperty("--zc-pt-h", want.split(".")[0]);
+            el.dataset.zcPtOn = "1";
+          } else {
+            el.style.removeProperty("--zc-pt-h");
+            delete el.dataset.zcPtOn;
+          }
+        } catch (_) {}
+      }
       try {
         enhanceMenus();
       } catch (_) {}
@@ -734,6 +806,16 @@
         HEADER_SELECTOR + "[data-zc-pt-on]::before {",
         "  content: \"\"; position: absolute; inset: 0; border-radius: inherit;",
         "  background: hsl(var(--zc-pt-h, 0) 60% 50% / 0.06);",
+        "  pointer-events: none; }",
+        AUTOMATION_SELECTOR + " { position: relative; }",
+        AUTOMATION_SELECTOR + "[data-zc-pt-on]::before {",
+        "  content: \"\"; position: absolute; inset: 0; border-radius: inherit;",
+        "  background: hsl(var(--zc-pt-h, 0) 70% 55% / 0.09);",
+        "  pointer-events: none; }",
+        AUTOMATION_SELECTOR + "[data-zc-pt-on]::after {",
+        "  content: \"\"; position: absolute; left: 1px; top: 50%; transform: translateY(-50%);",
+        "  width: 3px; height: 60%; border-radius: 2px;",
+        "  background: hsl(var(--zc-pt-h, 0) 70% 60% / 0.55);",
         "  pointer-events: none; }",
         ".zc-pt-menu {",
         "  position: fixed; z-index: 2147483646; width: 224px; padding: 10px;",
@@ -878,6 +960,7 @@
     // ---- native "..." menu / context menu enhancement ----
     let pendingProject = null;
     let pendingTask = null;
+    let pendingAutomation = null;
     // lucide "ban" glyph — used by the one-click "cancel color" entries
     const BAN_PATHS = '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>';
     function dismissNativeMenu(menuEl) {
@@ -914,22 +997,36 @@
       const now = Date.now();
       const task = pendingTask && now - pendingTask.at < 4000 ? pendingTask : null;
       const proj = !task && pendingProject && now - pendingProject.at < 4000 ? pendingProject : null;
-      if (!task && !proj) return;
+      const auto =
+        !task && !proj && pendingAutomation && now - pendingAutomation.at < 4000
+          ? pendingAutomation
+          : null;
+      if (!task && !proj && !auto) return;
       for (const menuEl of menus) {
-        let template = null;
         const wantTask = task && !proj;
-        const kw = wantTask ? /移除|归档|置顶|固定|重命名|删除|移到/ : /移除/;
-        for (const it of menuEl.querySelectorAll('[role="menuitem"]')) {
-          if ((it.textContent || "").search(kw) !== -1) {
-            template = it;
-            break;
+        const wantAuto = !task && !proj && !!auto;
+        let template = null;
+        if (wantAuto) {
+          // the automation card dropdown is detected structurally: its
+          // pause/delete items carry automation-action-* testids, so no
+          // keyword guessing against localized labels
+          template = menuEl.querySelector(
+            '[role="menuitem"][data-testid^="automation-action-"]',
+          );
+        } else {
+          const kw = wantTask ? /移除|归档|置顶|固定|重命名|删除|移到/ : /移除/;
+          for (const it of menuEl.querySelectorAll('[role="menuitem"]')) {
+            if ((it.textContent || "").search(kw) !== -1) {
+              template = it;
+              break;
+            }
+          }
+          if (!template && wantTask) {
+            template = menuEl.querySelector('[role="menuitem"]');
           }
         }
-        if (!template && wantTask) {
-          template = menuEl.querySelector('[role="menuitem"]');
-        }
         if (!template) continue;
-        menuEl.dataset.zcPtMenu = wantTask ? task.key : proj.path;
+        menuEl.dataset.zcPtMenu = wantAuto ? auto.id : wantTask ? task.key : proj.path;
         const mk = (label, paths, fn) => {
           const el = template.cloneNode(true);
           el.setAttribute("data-zc-pt-item", "1");
@@ -946,12 +1043,23 @@
           el.addEventListener("click", (ev) => {
             ev.stopPropagation();
             dismissNativeMenu(menuEl);
-            if (wantTask) fn(task.key, task.title, ev.clientX || 200, ev.clientY || 200);
+            if (wantAuto) fn(auto.id, auto.title, ev.clientX || 200, ev.clientY || 200);
+            else if (wantTask) fn(task.key, task.title, ev.clientX || 200, ev.clientY || 200);
             else fn(proj.path, ev.clientX || 200, ev.clientY || 200);
           });
           return el;
         };
-        if (wantTask) {
+        if (wantAuto) {
+          menuEl.appendChild(mk("调整颜色（此自动化）", iconInner("palette"), openAutomationPicker));
+          menuEl.appendChild(
+            mk("取消颜色（此自动化）", BAN_PATHS, (id) => {
+              const m = readAutoMap();
+              m[id] = -1;
+              writeAutoMap(m);
+              pass(document);
+            }),
+          );
+        } else if (wantTask) {
           menuEl.appendChild(mk("调整颜色（此对话）", iconInner("palette"), openTaskPicker));
           menuEl.appendChild(
             mk("取消颜色（此对话）", BAN_PATHS, (key) => {
@@ -1203,6 +1311,82 @@
       }
     }
 
+    // Per-automation picker: overrides the color of a single automation card;
+    // "自" clears the override so the card follows its project again.
+    function openAutomationPicker(id, title, x, y) {
+      try {
+        if (!id) return;
+        closeMenu();
+        injectStyle();
+        menu = document.createElement("div");
+        menu.className = "zc-pt-menu";
+        const cap = document.createElement("div");
+        cap.className = "zc-pt-title";
+        cap.textContent = title || "此自动化";
+        menu.appendChild(cap);
+        const hint = document.createElement("div");
+        hint.className = "zc-pt-sep";
+        hint.style.margin = "0 0 8px";
+        hint.textContent = "只影响这一条自动化，未选时跟随所在项目";
+        menu.appendChild(hint);
+        const grid = document.createElement("div");
+        grid.className = "zc-pt-grid";
+        for (const h of HUES) {
+          const sw = document.createElement("div");
+          sw.className = "zc-pt-swatch";
+          sw.style.background = "hsl(" + h + " 70% 55%)";
+          sw.dataset.v = String(h);
+          sw.title = "色相 " + h;
+          sw.addEventListener("click", () => {
+            const m = readAutoMap();
+            m[id] = h;
+            writeAutoMap(m);
+            pass(document);
+            markCurrent(grid, h);
+          });
+          grid.appendChild(sw);
+        }
+        const noneSw = document.createElement("div");
+        noneSw.className = "zc-pt-swatch zc-pt-none";
+        noneSw.dataset.v = "-1";
+        noneSw.title = "透明（本条不染色，优先于项目颜色）";
+        noneSw.addEventListener("click", () => {
+          const m = readAutoMap();
+          m[id] = -1;
+          writeAutoMap(m);
+          pass(document);
+          markCurrent(grid, -1);
+        });
+        grid.appendChild(noneSw);
+        const auto = document.createElement("div");
+        auto.className = "zc-pt-swatch zc-pt-auto";
+        auto.textContent = "自";
+        auto.dataset.v = "auto";
+        auto.title = "清除自动化颜色，恢复跟随项目";
+        auto.addEventListener("click", () => {
+          const m = readAutoMap();
+          delete m[id];
+          writeAutoMap(m);
+          pass(document);
+          markCurrent(grid, "auto");
+        });
+        grid.appendChild(auto);
+        menu.appendChild(grid);
+        markCurrent(grid, String(readAutoMap()[id] ?? "auto"));
+        document.body.appendChild(menu);
+        const r = menu.getBoundingClientRect();
+        menu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
+        menu.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
+        document.addEventListener("pointerdown", onDocPointer, true);
+        document.addEventListener("keydown", onDocKey, true);
+        document.addEventListener("contextmenu", onMenuCtx, true);
+      } catch (err) {
+        try {
+          console.error("[zc-prism] automation picker", err);
+        } catch (_) {}
+      }
+    }
+
     document.addEventListener(
       "contextmenu",
       (e) => {
@@ -1216,6 +1400,16 @@
               e.preventDefault();
               e.stopPropagation();
               openPicker(path, e.clientX, e.clientY);
+            }
+            return;
+          }
+          const acard = target.closest(AUTOMATION_SELECTOR);
+          if (acard) {
+            const id = automationIdOf(acard);
+            if (id) {
+              e.preventDefault();
+              e.stopPropagation();
+              openAutomationPicker(id, automationTitleOf(acard), e.clientX, e.clientY);
             }
             return;
           }
@@ -1259,7 +1453,8 @@
       } catch (_) {}
       // remember what was last interacted with, so the native menus can be
       // enhanced with our entries when they open (project header "..." menu →
-      // project color/rename; row context menu → per-conversation color)
+      // project color/rename; row context menu → per-conversation color;
+      // automation card "..." menu → per-automation color)
       document.addEventListener(
         "pointerdown",
         (e) => {
@@ -1271,6 +1466,7 @@
               const key = taskKeyOf(row);
               if (key) {
                 pendingTask = { key, title: taskTitleOf(row), at: Date.now() };
+                pendingAutomation = null;
                 return;
               }
             }
@@ -1280,6 +1476,17 @@
               if (p) {
                 pendingProject = { path: p, at: Date.now() };
                 pendingTask = null;
+                pendingAutomation = null;
+                return;
+              }
+            }
+            const acard = t.closest(AUTOMATION_SELECTOR);
+            if (acard) {
+              const id = automationIdOf(acard);
+              if (id) {
+                pendingAutomation = { id, title: automationTitleOf(acard), at: Date.now() };
+                pendingTask = null;
+                pendingProject = null;
                 return;
               }
             }
@@ -1287,19 +1494,22 @@
             // from it (account popup, model picker, …) never inherits one.
             pendingTask = null;
             pendingProject = null;
+            pendingAutomation = null;
           } catch (_) {}
         },
         true,
       );
       window.__zcPrism = {
-        version: 12,
+        version: 13,
         pass,
         openPicker,
         openTaskPicker,
+        openAutomationPicker,
         openRename,
         applyRecency,
         removeGroupRecency,
         taskKeyOf,
+        automationIdOf,
         get recencyState() {
           return recencyState;
         },
