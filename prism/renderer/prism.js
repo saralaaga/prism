@@ -1,8 +1,9 @@
-// zc-prism v13 (installed by the Prism plugin for ZCode)
+// zc-prism v14 (installed by the Prism plugin for ZCode)
 // Per-project AND per-conversation color + icon for the ZCode desktop
 // sidebar, per-automation color on the Automations page (defaulting to the
-// automation's project color), a right-click picker on project headers, and
-// an opt-out recency ordering for every sidebar view. Everything here runs
+// automation's project color), a right-click picker on project headers, an
+// opt-out recency ordering for every sidebar view, and the project icon
+// carried onto grouped-view conversation rows. Everything here runs
 // inside the production renderer and must never break the app: every entry
 // point is defensive.
 // Icons are Lucide path data extracted from the app's own renderer chunks.
@@ -355,6 +356,47 @@
         if (orig === undefined) label.dataset.zcPtOrig = n.nodeValue;
         n.nodeValue = alias;
       }
+    }
+
+    // Grouped-view conversation rows: carry the project's picked icon at the
+    // far left of the title line (the native row has no leading icon slot).
+    // The title line is the row's first span child, recognized by the marquee
+    // track React renders inside it; anything else is left untouched. The
+    // icon span is PREPENDED to that line — React reconciles only the nodes
+    // it tracks, so a foreign leading element coexists with re-renders (same
+    // insertion pattern as the header icon). Color follows the project (not
+    // per-conversation overrides) so the icon keeps meaning "this project",
+    // matching the header icon.
+    function syncRowIcon(row, path, iconMap, color) {
+      const line = row.firstElementChild;
+      const mine = line
+        ? line.querySelector(':scope > span[data-zc-pt-ricon="1"]')
+        : null;
+      const ok =
+        line &&
+        line.parentElement === row &&
+        line.tagName === "SPAN" &&
+        line.querySelector("span[data-task-title-marquee-track]");
+      const iconId = ok ? iconMap[path] : undefined;
+      if (!iconId || !ICONS[iconId]) {
+        if (mine) mine.remove();
+        return;
+      }
+      const wantKey = iconId + "|" + (color || "");
+      if (mine && mine.dataset.zc === wantKey) return;
+      if (!mine) {
+        mine = document.createElement("span");
+        mine.dataset.zcPtRicon = "1";
+        line.insertBefore(mine, line.firstChild);
+      }
+      mine.dataset.zc = wantKey;
+      mine.style.cssText =
+        "display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;flex:none" +
+        (color ? ";color:" + color : "");
+      mine.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        iconInner(iconId) +
+        "</svg>";
     }
 
     // ---- sidebar recency ordering (display-only, all views) ----
@@ -736,6 +778,20 @@
         }
         if (hit) rowAliasApplied.set(path, alias);
         else if (applied !== undefined) rowAliasApplied.set(path, applied);
+      }
+      // grouped-view rows show the project's picked icon before the title;
+      // icon color = project color (explicit > auto), transparent → foreground
+      const iconMap = readIconMap();
+      for (const el of rows) {
+        if (!el.hasAttribute("data-grouped-task-key")) continue;
+        const path = projectOfRow(el);
+        if (!path) continue;
+        const pv = map[path];
+        const hue =
+          typeof pv === "number" ? (pv === -1 ? null : pv) : st.autoColor ? autoHue(path) : null;
+        try {
+          syncRowIcon(el, path, iconMap, hue === null ? null : "hsl(" + hue + " 70% 55%)");
+        } catch (_) {}
       }
       const headers = root.querySelectorAll(HEADER_SELECTOR);
       for (const el of headers) {
@@ -1500,7 +1556,7 @@
         true,
       );
       window.__zcPrism = {
-        version: 13,
+        version: 14,
         pass,
         openPicker,
         openTaskPicker,
