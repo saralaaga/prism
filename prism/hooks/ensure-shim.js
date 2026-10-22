@@ -26,7 +26,13 @@ let asar;
 try {
   asar = require("@electron/asar");
 } catch (err) {
-  process.exit(0);
+  try {
+    // marketplace installs ship no node_modules; fall back to the bundled
+    // zero-dependency implementation (byte-verified against the library)
+    asar = require("./asar-lite.js");
+  } catch (err2) {
+    process.exit(0);
+  }
 }
 
 function readState() {

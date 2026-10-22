@@ -68,7 +68,7 @@ node prism/hooks/ensure-shim.js --apply   # 手动重打；平时 SessionStart �
 ```
 
 - `tools/fuse-check.js`：检查 Electron 熔丝（Prism 依赖 asar 完整性校验未启用的前提，换机器迁移时先跑它）。
-- `prism/node_modules` 随仓库提交：marketplace 分发不走 npm install，hook 运行时需要 `@electron/asar` 就地可用。
+- `prism/node_modules` 随仓库提交，供本地开发安装就地使用 `@electron/asar`；市场分发不带 node_modules，钩子此时回退到 `prism/hooks/asar-lite.js`（零依赖实现，已与官方库在真实应用档案上做过字节级比对）。
 - macOS 仅在 `/Applications/ZCode.app` 布局下验证过；其他平台/安装位置需改 `ensure-shim.js` 里的 `ASAR` 常量。
 
 ## License
