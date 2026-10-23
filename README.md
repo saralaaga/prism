@@ -4,6 +4,8 @@
 
 **Prism** 是 [ZCode](https://github.com/zai-org/ZCode) 桌面端的插件：给左侧边栏里的每个项目一套独立的视觉身份——颜色、图标、显示名——并提供全局外观微调。
 
+> ⚠️️ **实验性 / 需显式开启（0.6.0 起）**：Prism 依靠向 `/Applications/ZCode.app` 的 `app.asar` 注入渲染层脚本来重整桌面端 UI，这超出了官方插件 API 的边界。因此自 0.6.0 起**默认不做任何修改**——安装后保持静默，直到你创建 `~/.zcode/prism-opt-in` 标记；删除标记后下次会话自动恢复原始应用包。详见[安装](#安装)与[回滚](#回滚)。
+
 ## 功能
 
 - **项目颜色**：每个项目的所有会话行染上专属色（背景叠加 + 左侧色条），跨「项目 / 分组 / 时间线」视图一致。默认不自动配色——只有手动指定的项目才染色；想要「未指定时按项目路径哈希自动分配色相」的行为，在全局开关里打开「自动配色」即可。
@@ -40,20 +42,38 @@
 Settings → Plugins → Discover → + → Add marketplace → 填入本仓库路径（或 Git 地址）→ 安装 prism
 ```
 
-启用后，SessionStart 钩子会自动把渲染层 shim 打进 `/Applications/ZCode.app`（后台执行，不阻塞会话）；**应用自动更新后也会自动重打**。shim 内容以 hash 契约校验，插件升级后下次开会话自动更新。
+### 开启（opt-in）
+
+安装/启用插件后它**不会**立即修改任何东西。要让渲染层 shim 生效，创建标记文件并开一个新会话（或重启 ZCode）：
+
+```sh
+mkdir -p ~/.zcode && touch ~/.zcode/prism-opt-in
+```
+
+之后 SessionStart 钩子会自动把渲染层 shim 打进 `/Applications/ZCode.app`（后台执行，不阻塞会话）；**应用自动更新后也会自动重打**。shim 内容以 hash 契约校验，插件升级后下次开会话自动更新。没有标记时钩子保持静默；若发现历史遗留的补丁，会自动将其剥离并恢复原始包。
 
 ### 回滚
 
+推荐：删除 opt-in 标记后开一个新会话，钩子会自动把 `app.asar` 恢复为未打补丁状态并刷新 pristine 备份：
+
 ```sh
-cd /Applications/ZCode.app/Contents/Resources
-mv app.asar app.asar.patched && mv app.asar.orig app.asar   # 首次打补丁前的原始备份
+rm ~/.zcode/prism-opt-in
 ```
 
-插件层面：在插件列表禁用/卸载即可（shim 已打入的着色随下次回滚消失）。
+手动方式（立即生效）：
+
+```sh
+node <插件目录>/hooks/ensure-shim.js --rollback
+# 或直接换回备份：
+cd /Applications/ZCode.app/Contents/Resources
+mv app.asar app.asar.patched && mv app.asar.pristine-backup app.asar
+```
+
+插件层面：在插件列表禁用/卸载即可（shim 已打入的着色随回滚消失）。
 
 ## 工作原理（一句话版）
 
-ZCode 插件系统碰不到桌面端 UI，所以 Prism 分两层：**插件本体**（hooks/commands，负责把渲染层 shim 安装进 app 并自愈）+ **渲染层 shim**（注入 `index.html` 的独立脚本，负责着色/图标/别名/菜单扩展，全部防御式编码，异常只影响自身不影响 App）。
+ZCode 插件系统碰不到桌面端 UI，所以 Prism 分两层：**插件本体**（hooks/commands，负责把渲染层 shim 安装进 app 并自愈）+ **渲染层 shim**（注入 `index.html` 的独立脚本，负责着色/图标/别名/菜单扩展，全部防御式编码，异常只影响自身不影响 App）。安装行为受 opt-in 标记（`~/.zcode/prism-opt-in`）门控：无标记时不打补丁，且任何自动路径都无法绕过该检查。
 
 安全提示：shim 具备改写应用 bundle 的能力，安装前请审阅 `prism/renderer/prism.js` 与 `prism/hooks/ensure-shim.js`——两者都很短，且只在 `/Applications/ZCode.app` 存在时工作。
 
@@ -64,7 +84,8 @@ ZCode 插件系统碰不到桌面端 UI，所以 Prism 分两层：**插件本�
 npx @electron/asar extract /Applications/ZCode.app/Contents/Resources/app.asar /tmp/zc-extracted
 node tools/extract-icons.js /tmp/zc-extracted/out/renderer/assets icons.generated.js
 # 用生成结果更新 prism/renderer/prism.js 的 ICONS 常量后：
-node prism/hooks/ensure-shim.js --apply   # 手动重打；平时 SessionStart 自动
+node prism/hooks/ensure-shim.js --apply     # 按标记状态收敛（无标记只剥离不安装）
+node prism/hooks/ensure-shim.js --rollback  # 无条件剥离已装 shim
 ```
 
 - `tools/fuse-check.js`：检查 Electron 熔丝（Prism 依赖 asar 完整性校验未启用的前提，换机器迁移时先跑它）。

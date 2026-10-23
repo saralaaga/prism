@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 // Prism plugin — SessionStart hook.
+// Bundle patching is strictly opt-in: unless a marker file exists
+// (~/.zcode/prism-opt-in, or $ZCODE_PLUGIN_DATA/opt-in) the hook never
+// patches, and a previously patched app.asar is restored instead.
 // Quick mode (default): verify the ZCode desktop app carries the CURRENT
 // renderer shim (matched by content hash, so any shim change re-applies); if
-// missing/stale, relaunch self in a detached --apply child so the session
-// never blocks. Apply mode: extract the current app.asar, strip any legacy
-// zc-* shim envelope, inject the bundled renderer script, repack and swap in
-// place (keeping one pristine backup of an unpatched app).
+// missing/stale, relaunch self in a detached --apply (or --rollback when not
+// opted in) child so the session never blocks. Apply mode: extract the
+// current app.asar, strip any legacy zc-* shim envelope, inject the bundled
+// renderer script, repack and swap in place (keeping one pristine backup of
+// an unpatched app). Rollback mode: the same pipeline minus the injection —
+// restore the app to its unpatched state and refresh the pristine backup.
 "use strict";
 
 const fs = require("fs");
@@ -21,6 +26,14 @@ const STATE_FILE = path.join(os.homedir(), ".zcode", "prism-state.json");
 const ASAR = "/Applications/ZCode.app/Contents/Resources/app.asar";
 const RESOURCES = path.dirname(ASAR);
 const APPLY_STALE_MS = 15 * 60 * 1000;
+const OPT_IN_FILES = [path.join(os.homedir(), ".zcode", "prism-opt-in")];
+if (process.env.ZCODE_PLUGIN_DATA)
+  OPT_IN_FILES.push(path.join(process.env.ZCODE_PLUGIN_DATA, "opt-in"));
+
+// explicit consent gate: no marker file -> no bundle patching, ever
+function optIn() {
+  return OPT_IN_FILES.some((p) => fs.existsSync(p));
+}
 
 let asar;
 try {
@@ -125,7 +138,7 @@ function readIndex(asarPath) {
   return asar.extractFile(asarPath, "out/renderer/index.html").toString("utf8");
 }
 
-async function apply() {
+async function rebuild(install) {
   const state = readState();
   if (state.applyingAt && Date.now() - state.applyingAt < APPLY_STALE_MS) return;
   writeState({ applyingAt: Date.now(), lastError: null });
@@ -134,7 +147,14 @@ async function apply() {
     asar.extractAll(ASAR, tmp);
     const indexPath = path.join(tmp, "out", "renderer", "index.html");
     let html = fs.readFileSync(indexPath, "utf8");
-    const alreadyCurrent = isCurrent(html);
+    if (install ? isCurrent(html) : !LEGACY_ENVELOPE_RE.test(html)) {
+      if (!install && process.argv.includes("--apply"))
+        console.error(
+          "[zc-prism] opt-in marker missing (~/.zcode/prism-opt-in): nothing installed, nothing to strip",
+        );
+      writeState({ applyingAt: null });
+      return;
+    }
     // keep one pristine backup, but only of a truly unpatched app
     const pristine = path.join(RESOURCES, "app.asar.pristine-backup");
     if (!LEGACY_ENVELOPE_RE.test(html) && !fs.existsSync(pristine)) {
@@ -142,11 +162,12 @@ async function apply() {
         fs.copyFileSync(ASAR, pristine);
       } catch (_) {}
     }
-    if (alreadyCurrent) return;
     html = html.replace(INJECT_RE, ""); // strip any older shim envelope
-    const shim = fs.readFileSync(shimPath(), "utf8");
-    if (!html.includes("</body>")) throw new Error("index.html has no </body>");
-    html = html.replace("</body>", envelopeOf(shim) + "</body>");
+    if (install) {
+      const shim = fs.readFileSync(shimPath(), "utf8");
+      if (!html.includes("</body>")) throw new Error("index.html has no </body>");
+      html = html.replace("</body>", envelopeOf(shim) + "</body>");
+    }
     fs.writeFileSync(indexPath, html);
 
     const incomingAsar = path.join(RESOURCES, ".zc-prism-incoming.asar");
@@ -155,8 +176,10 @@ async function apply() {
     await asar.createPackageWithOptions(tmp, incomingAsar, {
       unpack: "**/{*.node,spawn-helper}",
     });
-    // sanity: the packaged index must carry the current shim before any swap
-    if (!isCurrent(readIndex(incomingAsar))) throw new Error("packaged asar failed hash check");
+    // sanity: the packaged index must match the goal before any swap
+    const packaged = readIndex(incomingAsar);
+    if (install ? !isCurrent(packaged) : LEGACY_ENVELOPE_RE.test(packaged))
+      throw new Error("packaged asar failed " + (install ? "hash" : "cleanliness") + " check");
 
     const prevAsar = path.join(RESOURCES, "app.asar.pre-prism");
     try {
@@ -174,7 +197,18 @@ async function apply() {
     try {
       fs.rmSync(prevAsar, { force: true });
     } catch (_) {}
-    writeState({ applyingAt: null, lastApply: new Date().toISOString(), lastResult: "installed" });
+    if (install) {
+      writeState({ applyingAt: null, lastApply: new Date().toISOString(), lastResult: "installed" });
+    } else {
+      try {
+        fs.copyFileSync(ASAR, pristine); // the stripped build becomes the fresh backup
+      } catch (_) {}
+      writeState({
+        applyingAt: null,
+        lastRollback: new Date().toISOString(),
+        lastResult: "rolled back (not opted in)",
+      });
+    }
   } catch (err) {
     writeState({ applyingAt: null, lastResult: "error", lastError: String(err && err.message) });
   } finally {
@@ -184,8 +218,10 @@ async function apply() {
   }
 }
 
-if (process.argv.includes("--apply")) {
-  apply()
+if (process.argv.includes("--apply") || process.argv.includes("--rollback")) {
+  // --apply converges the bundle to the opt-in state (the marker decides);
+  // --rollback strips unconditionally. No spawned path can bypass the gate.
+  rebuild(process.argv.includes("--rollback") ? false : optIn())
     .catch(() => {})
     .finally(() => process.exit(0));
 } else {
@@ -208,8 +244,11 @@ if (process.argv.includes("--apply")) {
         configFound: Object.keys(readPluginConfig()),
       },
     });
-    if (isCurrent(readIndex(ASAR))) {
-      writeState({ lastResult: "ok" });
+    const html = readIndex(ASAR);
+    const optedIn = optIn();
+    writeState({ optIn: optedIn });
+    if (optedIn ? isCurrent(html) : !LEGACY_ENVELOPE_RE.test(html)) {
+      writeState({ lastResult: optedIn ? "ok" : "ok (inactive: no opt-in)" });
       process.exit(0);
     }
     const state = readState();

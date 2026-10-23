@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [0.6.0] — 2026-10-23
+
+### 变更
+
+- **应用包补丁改为显式 opt-in（实验性插件）**：应官方插件市场维护者反馈，修改 `app.asar` 不再是默认行为。安装/更新插件后钩子保持静默，直到创建 `~/.zcode/prism-opt-in` 标记文件（`$ZCODE_PLUGIN_DATA/opt-in` 亦可）才开始安装 shim；删除标记后，下次会话启动自动把 `app.asar` 恢复为未打补丁状态并刷新 pristine 备份。新增 `--rollback` 显式剥离模式；`--apply` 现在按标记状态收敛（无标记只剥离不安装），任何自动路径都无法绕过标记检查。渲染层 prism.js 无变化（仍为 shim v14），已 opt-in 的用户升级后无感知。
+
 ## [0.5.1] — 2026-10-18
 
 渲染层 shim 升级到 v14。

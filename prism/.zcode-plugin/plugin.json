@@ -1,10 +1,10 @@
 {
   "name": "prism",
-  "version": "0.5.1",
-  "description": "Prism: give every project in the ZCode sidebar its own color, icon and display name, color each automation card after its project (or a custom pick), plus a recency-ordered grouped view. Right-click a project (or its '...' menu) to personalize; self-heals after app updates.",
+  "version": "0.6.0",
+  "description": "Prism (experimental, opt-in): give every project in the ZCode sidebar its own color, icon and display name, recolor conversations and automation cards, and keep the sidebar recency-ordered. The app bundle is NOT patched by default — create ~/.zcode/prism-opt-in to enable the shim; removing the marker auto-restores the original bundle.",
   "description_i18n": {
-    "en": "Prism: give every project in the ZCode sidebar its own color, icon and display name, color each automation card after its project (or a custom pick), plus a recency-ordered grouped view. Right-click a project (or its '...' menu) to personalize; self-heals after app updates.",
-    "zh-CN": "Prism（棱镜）：为 ZCode 侧边栏中的每个项目赋予专属颜色、图标与显示名，「自动化」页的自动化卡片默认跟随所在项目配色（也可单独指定），并提供按最近活跃排序的分组视图；右键项目（或其「…」菜单）即可个性化，应用更新后自动恢复生效。"
+    "en": "Prism (experimental, opt-in): give every project in the ZCode sidebar its own color, icon and display name, recolor conversations and automation cards, and keep the sidebar recency-ordered. The app bundle is NOT patched by default — create ~/.zcode/prism-opt-in to enable the shim; removing the marker auto-restores the original bundle.",
+    "zh-CN": "Prism（棱镜，实验性、需显式开启）：为 ZCode 侧边栏的每个项目赋予专属颜色、图标与显示名，支持单条对话与自动化卡片配色及最近活跃排序。默认不修改应用包——创建 ~/.zcode/prism-opt-in 标记后才安装 shim，删除标记即自动恢复原始包。"
   },
   "author": {
     "name": "Carlos"
